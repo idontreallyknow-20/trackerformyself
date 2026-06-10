@@ -222,7 +222,11 @@ async function anthropicMessages(body) {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        lastErr = new Error("api error " + res.status);
+        let detail = "";
+        try {
+          detail = await res.text();
+        } catch {}
+        lastErr = new Error(`HTTP ${res.status}${detail ? ": " + detail.slice(0, 240) : ""}`);
         continue;
       }
       return await res.json();
@@ -889,10 +893,14 @@ export default function CalorieTracker() {
     } catch (e) {
       setPhotoBusy(false);
       setAddOpen(false);
-      // fall back to manual sheet
+      // fall back to manual sheet, surfacing the real error so it can be diagnosed
       setEditor({
         open: true,
-        initial: { meal: "Snack", name: "", note: "Photo estimate failed, enter it manually." },
+        initial: {
+          meal: "Snack",
+          name: "",
+          note: "Photo estimate failed. " + (e && e.message ? e.message : "Unknown error") + ". Enter it manually for now.",
+        },
       });
     }
   }, []);
