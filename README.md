@@ -17,15 +17,20 @@ and camera access).
 ## Run it on your phone with working photo AI (Vercel, recommended)
 
 Vercel hosts the app AND a tiny serverless function (`api/messages.js`) that holds
-your Anthropic API key, so the photo estimate and name lookup work on your phone.
+your AI key, so the photo estimate and name lookup work on your phone. The function
+works with EITHER provider, whichever key you set:
+
+- `GEMINI_API_KEY` - FREE. Get one at [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+- `ANTHROPIC_API_KEY` - paid, from [console.anthropic.com](https://console.anthropic.com).
+
+Steps:
 
 1. Push this repo to GitHub.
 2. Go to [vercel.com](https://vercel.com), sign in with GitHub, and import this repo.
 3. Vercel reads `vercel.json` automatically (build command and output are preset).
-4. In the project, open **Settings -> Environment Variables** and add:
-   - Name: `ANTHROPIC_API_KEY`
-   - Value: your key from [console.anthropic.com](https://console.anthropic.com)
-     (this is the pay-as-you-go API, billed separately from a Claude Pro plan).
+4. In the project, open **Settings -> Environment Variables** and add ONE of:
+   - `GEMINI_API_KEY` = your free Google AI Studio key (recommended), or
+   - `ANTHROPIC_API_KEY` = your Anthropic key.
 5. **Deploy.** Vercel gives you a URL like `https://trackerformyself.vercel.app`.
 
 The app calls the Anthropic API directly when it can; when the browser blocks that
@@ -52,12 +57,12 @@ to manual entry because there is no key.
 
 Your data is saved on the device and survives closing and reopening the app.
 
-## Note on the AI and your Claude subscription
+## Note on subscriptions vs API keys
 
-A Claude Pro subscription covers Claude.ai and the apps, but NOT the API. The photo
-estimate and name lookup use the Anthropic API, which is billed separately through
-the Anthropic Console. The Vercel setup above is what makes those features work on
-your installed app, using your own API key.
+A Claude Pro or ChatGPT Plus subscription covers those chat apps, but NOT API
+access. The photo estimate and name lookup use an AI API, which is a separate key.
+The easiest free key is Google Gemini (aistudio.google.com/apikey); set it as
+`GEMINI_API_KEY` in the Vercel setup above and the features work at no cost.
 
 ## Rebuild the static site
 
