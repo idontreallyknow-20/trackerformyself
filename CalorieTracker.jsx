@@ -207,48 +207,62 @@ function collectText(data) {
     .join("\n");
 }
 
+// Call the Anthropic Messages API. In the Claude artifact sandbox the direct
+// call succeeds (the key is handled for us). On a self-hosted copy the direct
+// browser call is blocked by CORS, so we fall back to a same-origin /api proxy
+// that adds the key server-side (see api/messages.js for the Vercel function).
+async function anthropicMessages(body) {
+  const endpoints = ["https://api.anthropic.com/v1/messages", "/api/messages"];
+  let lastErr;
+  for (const url of endpoints) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        lastErr = new Error("api error " + res.status);
+        continue;
+      }
+      return await res.json();
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("no endpoint reachable");
+}
+
 async function estimateFromPhoto(jpegDataUrl) {
   const base64 = jpegDataUrl.split(",")[1];
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-opus-4-8",
-      max_tokens: 1000,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: { type: "base64", media_type: "image/jpeg", data: base64 },
-            },
-            { type: "text", text: PHOTO_PROMPT },
-          ],
-        },
-      ],
-    }),
+  const data = await anthropicMessages({
+    model: "claude-opus-4-8",
+    max_tokens: 1000,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/jpeg", data: base64 },
+          },
+          { type: "text", text: PHOTO_PROMPT },
+        ],
+      },
+    ],
   });
-  if (!res.ok) throw new Error("api error " + res.status);
-  const data = await res.json();
   const est = normalizeEstimate(extractJson(collectText(data)));
   if (!est) throw new Error("parse failed");
   return est;
 }
 
 async function lookupByName(query) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-opus-4-8",
-      max_tokens: 1000,
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
-      messages: [{ role: "user", content: LOOKUP_PROMPT(query) }],
-    }),
+  const data = await anthropicMessages({
+    model: "claude-opus-4-8",
+    max_tokens: 1000,
+    tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
+    messages: [{ role: "user", content: LOOKUP_PROMPT(query) }],
   });
-  if (!res.ok) throw new Error("api error " + res.status);
-  const data = await res.json();
   const est = normalizeEstimate(extractJson(collectText(data)));
   if (!est) throw new Error("parse failed");
   return est;
