@@ -1,6 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import CalorieTracker from "../CalorieTracker.jsx";
+import CalorieTracker from "./CalorieTracker.jsx";
 
 const el = document.getElementById("root");
 createRoot(el).render(React.createElement(CalorieTracker));

@@ -1,32 +1,16 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
 import {
   Flame, Plus, Camera, Image as ImageIcon, Search, Pencil, Trash2,
   Pill, Scale, Target, Calendar, ChevronDown, ChevronUp,
   X, Check, Utensils, Loader2, BarChart3, Home, Drumstick, Wheat,
   Droplet, Sparkles,
 } from "lucide-react";
-import {
-  BarChart, Bar, LineChart, Line, XAxis, YAxis, ReferenceLine,
-  ResponsiveContainer, Cell, Tooltip,
-} from "recharts";
+import { C, num, fmt } from "./theme.js";
 
 /* ============================================================
-   Palette and constants
+   Constants
    ============================================================ */
-const C = {
-  cream: "#FBF3E4",
-  card: "#FFFFFF",
-  ink: "#2B2118",
-  inkSoft: "#6F6457",
-  teal: "#147D74",
-  tealSoft: "#D5EAE6",
-  coral: "#E2603F",
-  coralSoft: "#FBDDD3",
-  sun: "#F2B705",
-  sunSoft: "#FCEBBE",
-  line: "#E8DCC6",
-  green: "#3F8F4F",
-};
+const AUTHOR_URL = "https://josephleung-site.vercel.app";
 
 const MEALS = ["Breakfast", "Lunch", "Snack", "Dinner"];
 const SK = (k) => `jt:${k}`;
@@ -69,16 +53,11 @@ const store = {
 /* ============================================================
    Date helpers
    ============================================================ */
-const todayKey = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
-};
 const dayKeyFromDate = (d) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
     d.getDate()
   ).padStart(2, "0")}`;
+const todayKey = () => dayKeyFromDate(new Date());
 const shortDay = (key) => {
   const [y, m, d] = key.split("-").map(Number);
   const dt = new Date(y, m - 1, d);
@@ -89,11 +68,6 @@ const weekday = (key) => {
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short" });
 };
 
-const num = (v) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-};
-const fmt = (n) => Math.round(num(n)).toLocaleString();
 
 /* ============================================================
    Default goal / targets
@@ -145,15 +119,20 @@ function extractJson(text) {
   let t = text.trim();
   const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence) t = fence[1].trim();
+  // the answer is a flat object; search answers can wrap it in prose, so try
+  // each flat {...} from last to first, then the widest slice as a fallback
+  const flat = t.match(/\{[^{}]*\}/g) || [];
   const start = t.indexOf("{");
   const end = t.lastIndexOf("}");
-  if (start === -1 || end === -1 || end < start) return null;
-  const slice = t.slice(start, end + 1);
-  try {
-    return JSON.parse(slice);
-  } catch {
-    return null;
+  const candidates = flat.reverse();
+  if (start !== -1 && end > start) candidates.push(t.slice(start, end + 1));
+  for (const c of candidates) {
+    try {
+      const obj = JSON.parse(c);
+      if (obj && typeof obj === "object" && "calories" in obj) return obj;
+    } catch {}
   }
+  return null;
 }
 
 function normalizeEstimate(obj) {
@@ -174,7 +153,7 @@ function normalizeEstimate(obj) {
 }
 
 /* ============================================================
-   Anthropic API calls (no key, handled by sandbox)
+   AI calls (Anthropic-shaped; key handled by the sandbox or /api proxy)
    ============================================================ */
 const PHOTO_PROMPT =
   "You are a nutrition estimator. Look at this meal photo. Break the meal into its " +
@@ -207,12 +186,11 @@ function collectText(data) {
     .join("\n");
 }
 
-// Call the Anthropic Messages API. In the Claude artifact sandbox the direct
-// call succeeds (the key is handled for us). On a self-hosted copy the direct
-// browser call is blocked by CORS, so we fall back to a same-origin /api proxy
-// that adds the key server-side (see api/messages.js for the Vercel function).
+// On a self-hosted copy the same-origin /api proxy adds the key server-side
+// (see api/messages.js). Inside the Claude artifact sandbox there is no proxy,
+// but the direct Anthropic call succeeds because the sandbox handles the key.
 async function anthropicMessages(body) {
-  const endpoints = ["https://api.anthropic.com/v1/messages", "/api/messages"];
+  const endpoints = ["/api/messages", "https://api.anthropic.com/v1/messages"];
   let lastErr;
   for (const url of endpoints) {
     try {
@@ -224,23 +202,33 @@ async function anthropicMessages(body) {
       if (!res.ok) {
         let detail = "";
         try {
-          detail = await res.text();
+          const data = await res.json();
+          detail = data.detail || data.error?.message || data.error || "";
         } catch {}
-        lastErr = new Error(`HTTP ${res.status}${detail ? ": " + detail.slice(0, 240) : ""}`);
+        // keep the proxy's error; the sandbox fallback failing is expected off-Claude
+        if (!lastErr) {
+          lastErr =
+            url.startsWith("/") && (res.status === 404 || res.status === 405)
+              ? new Error("AI estimates aren't set up on this host")
+              : new Error(`HTTP ${res.status}${detail ? ": " + String(detail).slice(0, 200) : ""}`);
+        }
         continue;
       }
       return await res.json();
     } catch (e) {
-      lastErr = e;
+      if (!lastErr) lastErr = e;
     }
   }
-  throw lastErr || new Error("no endpoint reachable");
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    throw new Error("You're offline");
+  }
+  throw lastErr || new Error("No AI endpoint reachable");
 }
 
 async function estimateFromPhoto(jpegDataUrl) {
   const base64 = jpegDataUrl.split(",")[1];
   const data = await anthropicMessages({
-    model: "claude-opus-4-8",
+    model: "claude-sonnet-5",
     max_tokens: 1000,
     messages: [
       {
@@ -256,19 +244,19 @@ async function estimateFromPhoto(jpegDataUrl) {
     ],
   });
   const est = normalizeEstimate(extractJson(collectText(data)));
-  if (!est) throw new Error("parse failed");
+  if (!est) throw new Error("Couldn't read the AI's answer");
   return est;
 }
 
 async function lookupByName(query) {
   const data = await anthropicMessages({
-    model: "claude-opus-4-8",
+    model: "claude-sonnet-5",
     max_tokens: 1000,
     tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
     messages: [{ role: "user", content: LOOKUP_PROMPT(query) }],
   });
   const est = normalizeEstimate(extractJson(collectText(data)));
-  if (!est) throw new Error("parse failed");
+  if (!est) throw new Error("Couldn't read the AI's answer");
   return est;
 }
 
@@ -402,7 +390,7 @@ function CalorieRing({ eaten, goal, size = 200 }) {
             marginTop: 8,
             fontSize: 13,
             fontWeight: 700,
-            color: over ? C.green : C.coral,
+            color: over ? C.green : C.coralInk,
             fontVariantNumeric: "tabular-nums",
           }}
         >
@@ -417,6 +405,23 @@ function CalorieRing({ eaten, goal, size = 200 }) {
    Sheet (bottom modal)
    ============================================================ */
 function Sheet({ open, onClose, title, children }) {
+  const panel = useRef(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const titleId = useMemo(() => `sheet-${Math.random().toString(36).slice(2, 8)}`, []);
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.activeElement;
+    const onKey = (e) => e.key === "Escape" && closeRef.current();
+    document.addEventListener("keydown", onKey);
+    // move focus into the sheet, to a [data-autofocus] field when there is one
+    const target = panel.current && (panel.current.querySelector("[data-autofocus]") || panel.current);
+    if (target) target.focus({ preventScroll: true });
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      if (prev && prev.focus) prev.focus();
+    };
+  }, [open]);
   if (!open) return null;
   return (
     <div
@@ -432,12 +437,18 @@ function Sheet({ open, onClose, title, children }) {
       }}
     >
       <div
+        ref={panel}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth: 480,
           background: C.cream,
-          maxHeight: "92vh",
+          maxHeight: "92dvh",
+          outline: "none",
           overflowY: "auto",
           borderTop: `3px solid ${C.teal}`,
           boxShadow: "0 -8px 30px rgba(0,0,0,0.2)",
@@ -456,9 +467,10 @@ function Sheet({ open, onClose, title, children }) {
             zIndex: 2,
           }}
         >
-          <span style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{title}</span>
+          <h2 id={titleId} style={{ margin: 0, fontSize: 17, fontWeight: 700, color: C.ink }}>{title}</h2>
           <button
             onClick={onClose}
+            aria-label="Close"
             style={{
               background: C.card,
               border: `1px solid ${C.line}`,
@@ -470,7 +482,7 @@ function Sheet({ open, onClose, title, children }) {
             <X size={18} color={C.ink} />
           </button>
         </div>
-        <div style={{ padding: 18 }}>{children}</div>
+        <div style={{ padding: "18px 18px calc(18px + env(safe-area-inset-bottom))" }}>{children}</div>
       </div>
     </div>
   );
@@ -509,15 +521,17 @@ const inputStyle = {
   fontVariantNumeric: "tabular-nums",
 };
 
-function NumIn({ value, onChange, suffix }) {
+function NumIn({ value, onChange, suffix, ...rest }) {
   return (
     <div style={{ position: "relative" }}>
       <input
         type="number"
         inputMode="decimal"
+        min="0"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        style={inputStyle}
+        style={{ ...inputStyle, paddingRight: suffix ? 44 : 12 }}
+        {...rest}
       />
       {suffix && (
         <span
@@ -528,6 +542,7 @@ function NumIn({ value, onChange, suffix }) {
             transform: "translateY(-50%)",
             fontSize: 12,
             color: C.inkSoft,
+            pointerEvents: "none",
           }}
         >
           {suffix}
@@ -549,13 +564,34 @@ function MealEditor({ open, initial, onClose, onSave, onDelete }) {
   const set = (k) => (v) => setF((s) => ({ ...s, [k]: v }));
 
   const conf = f.confidence;
+  const isError = f.noteTone === "error";
+  const clean = (v) => Math.max(0, num(v));
+  const save = () => {
+    const { noteTone, ...rest } = f;
+    onSave({
+      ...rest,
+      note: isError ? "" : f.note || "",
+      id: f.id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      meal: f.meal || "Snack",
+      name: (f.name || "").trim() || "Food",
+      calories: clean(f.calories),
+      protein: clean(f.protein),
+      carbs: clean(f.carbs),
+      fat: clean(f.fat),
+      fiber: clean(f.fiber),
+      sugar: clean(f.sugar),
+      sodium: clean(f.sodium),
+      satfat: clean(f.satfat),
+    });
+  };
   return (
     <Sheet open={open} onClose={onClose} title={f.id ? "Edit food" : "Add food"}>
       {f.note ? (
         <div
+          role={isError ? "alert" : undefined}
           style={{
-            background: C.tealSoft,
-            border: `1px solid ${C.teal}`,
+            background: isError ? C.coralSoft : C.tealSoft,
+            border: `1px solid ${isError ? C.coralInk : C.teal}`,
             padding: "9px 11px",
             marginBottom: 14,
             fontSize: 12,
@@ -564,9 +600,9 @@ function MealEditor({ open, initial, onClose, onSave, onDelete }) {
             gap: 7,
           }}
         >
-          <Sparkles size={15} color={C.teal} style={{ flexShrink: 0, marginTop: 1 }} />
+          <Sparkles size={15} color={isError ? C.coralInk : C.teal} style={{ flexShrink: 0, marginTop: 1 }} />
           <span>
-            {conf && (
+            {conf && !isError && (
               <strong style={{ textTransform: "capitalize" }}>{conf} confidence. </strong>
             )}
             {f.note}
@@ -579,15 +615,21 @@ function MealEditor({ open, initial, onClose, onSave, onDelete }) {
           value={f.name || ""}
           onChange={(e) => set("name")(e.target.value)}
           style={inputStyle}
-          placeholder="What did you eat"
+          placeholder="What did you eat?"
+          enterKeyHint="done"
         />
       </Field>
 
-      <Field label="Meal">
-        <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ marginBottom: 12 }}>
+        <span id="meal-label" style={{ fontSize: 12, fontWeight: 600, color: C.inkSoft, display: "block", marginBottom: 5 }}>
+          Meal
+        </span>
+        <div role="group" aria-labelledby="meal-label" style={{ display: "flex", gap: 8 }}>
           {MEALS.map((m) => (
             <button
               key={m}
+              type="button"
+              aria-pressed={f.meal === m}
               onClick={() => set("meal")(m)}
               style={{
                 flex: 1,
@@ -606,7 +648,7 @@ function MealEditor({ open, initial, onClose, onSave, onDelete }) {
             </button>
           ))}
         </div>
-      </Field>
+      </div>
 
       <Field label="Calories">
         <NumIn value={f.calories ?? ""} onChange={set("calories")} suffix="kcal" />
@@ -663,8 +705,8 @@ function MealEditor({ open, initial, onClose, onSave, onDelete }) {
             style={{
               padding: "13px 16px",
               background: C.card,
-              border: `1px solid ${C.coral}`,
-              color: C.coral,
+              border: `1px solid ${C.coralInk}`,
+              color: C.coralInk,
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
@@ -678,22 +720,7 @@ function MealEditor({ open, initial, onClose, onSave, onDelete }) {
           </button>
         )}
         <button
-          onClick={() =>
-            onSave({
-              ...f,
-              id: f.id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-              meal: f.meal || "Snack",
-              name: (f.name || "Food").trim(),
-              calories: num(f.calories),
-              protein: num(f.protein),
-              carbs: num(f.carbs),
-              fat: num(f.fat),
-              fiber: num(f.fiber),
-              sugar: num(f.sugar),
-              sodium: num(f.sodium),
-              satfat: num(f.satfat),
-            })
-          }
+          onClick={save}
           style={{
             flex: 1,
             padding: "13px 16px",
@@ -725,6 +752,8 @@ function LookupSheet({ open, onClose, onResult }) {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const openRef = useRef(open);
+  openRef.current = open;
   useEffect(() => {
     if (open) {
       setQ("");
@@ -739,9 +768,9 @@ function LookupSheet({ open, onClose, onResult }) {
     setErr("");
     try {
       const est = await lookupByName(q.trim());
-      onResult({ ...est, meal: "Snack" });
+      if (openRef.current) onResult({ ...est, meal: "Snack" });
     } catch (e) {
-      setErr("Could not find that. Try again or add it manually.");
+      setErr(`Couldn't look that up (${e && e.message ? e.message : "unknown error"}). Try again or add it manually.`);
       setBusy(false);
     }
   };
@@ -755,11 +784,12 @@ function LookupSheet({ open, onClose, onResult }) {
           onKeyDown={(e) => e.key === "Enter" && go()}
           style={inputStyle}
           placeholder="e.g. Chipotle chicken burrito bowl"
-          autoFocus
+          enterKeyHint="search"
+          data-autofocus
         />
       </Field>
       {err && (
-        <div style={{ color: C.coral, fontSize: 13, marginBottom: 12 }}>{err}</div>
+        <div role="alert" style={{ color: C.coralInk, fontSize: 13, marginBottom: 12, lineHeight: 1.45 }}>{err}</div>
       )}
       <button
         onClick={go}
@@ -783,7 +813,7 @@ function LookupSheet({ open, onClose, onResult }) {
       >
         {busy ? (
           <>
-            <Loader2 size={18} className="jt-spin" /> Searching nutrition facts
+            <Loader2 size={18} className="jt-spin" /> Searching nutrition facts…
           </>
         ) : (
           <>
@@ -812,9 +842,21 @@ export default function CalorieTracker() {
   const [addOpen, setAddOpen] = useState(false);
   const [lookupOpen, setLookupOpen] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
-  const [photoErr, setPhotoErr] = useState("");
   const [expanded, setExpanded] = useState({});
 
+  // re-render every minute and on return to the app, so "today", the pace note
+  // and streaks roll over correctly when the PWA is left open past midnight
+  const [clock, setClock] = useState(0);
+  useEffect(() => {
+    const tick = () => setClock((n) => n + 1);
+    const onVis = () => document.visibilityState === "visible" && tick();
+    const id = setInterval(tick, 60000);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
   const tk = todayKey();
 
   /* ---- load ---- */
@@ -835,6 +877,13 @@ export default function CalorieTracker() {
       setLoaded(true);
     })();
   }, []);
+
+  // warm up the chart code in the background so Stats and Weight open instantly
+  useEffect(() => {
+    if (!loaded) return;
+    const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1500));
+    idle(() => loadCharts().catch(() => {}));
+  }, [loaded]);
 
   /* ---- persist ---- */
   useEffect(() => { if (loaded) store.set("goal", goal); }, [goal, loaded]);
@@ -882,7 +931,6 @@ export default function CalorieTracker() {
   /* ---- photo flow (called from native label input change) ---- */
   const handlePhoto = useCallback(async (file) => {
     if (!file) return;
-    setPhotoErr("");
     setPhotoBusy(true);
     try {
       const jpeg = await downscaleToJpeg(file);
@@ -899,7 +947,8 @@ export default function CalorieTracker() {
         initial: {
           meal: "Snack",
           name: "",
-          note: "Photo estimate failed. " + (e && e.message ? e.message : "Unknown error") + ". Enter it manually for now.",
+          note: "Photo estimate failed: " + (e && e.message ? e.message : "unknown error") + ". Enter it manually for now.",
+          noteTone: "error",
         },
       });
     }
@@ -916,7 +965,7 @@ export default function CalorieTracker() {
       d.setDate(d.getDate() - 1);
     }
     return streak;
-  }, [creatine]);
+  }, [creatine, tk]);
   const tookCreatine = !!creatine[tk];
   const toggleCreatine = () =>
     setCreatine((prev) => {
@@ -941,7 +990,7 @@ export default function CalorieTracker() {
     if (diff < 0)
       return `About ${fmt(-diff)} kcal behind pace. Eat up to stay on track for the bulk.`;
     return `Ahead of pace by ${fmt(diff)} kcal. Strong eating day.`;
-  }, [totals.calories, goal.calories]);
+  }, [totals.calories, goal.calories, clock]);
 
   /* ---- suggestions ---- */
   const suggestions = useMemo(() => {
@@ -954,7 +1003,7 @@ export default function CalorieTracker() {
 
     if (calLeft > goal.calories * 0.25 && frac > 0.6)
       out.push({ icon: Flame, color: C.coral, text: `Behind on calories. ${fmt(calLeft)} kcal left to hit your bulk goal.` });
-    if (proLeft > goal.protein * 0.3)
+    if (proLeft > goal.protein * 0.3 && frac > 0.4)
       out.push({ icon: Drumstick, color: C.teal, text: `Protein is low. ${fmt(proLeft)}g to go. Add a shake or lean meat.` });
     if (totals.fiber < 12 && totals.calories > goal.calories * 0.4)
       out.push({ icon: Wheat, color: C.sun, text: `Fiber is light at ${fmt(totals.fiber)}g. Add fruit, oats, or veg.` });
@@ -967,7 +1016,7 @@ export default function CalorieTracker() {
     if (out.length === 0)
       out.push({ icon: Sparkles, color: C.teal, text: "Looking balanced. Keep the meals coming." });
     return out.slice(0, 3);
-  }, [totals, goal]);
+  }, [totals, goal, clock]);
 
   /* ---- 14 day series ---- */
   const series14 = useMemo(() => {
@@ -982,7 +1031,7 @@ export default function CalorieTracker() {
       arr.push({ key, label: shortDay(key), cals: Math.round(cals) });
     }
     return arr;
-  }, [days]);
+  }, [days, tk]);
 
   /* ---- weight derived ---- */
   const sortedWeights = useMemo(
@@ -997,40 +1046,35 @@ export default function CalorieTracker() {
      ============================================================ */
   if (!loaded)
     return (
-      <div style={{ ...page, alignItems: "center", justifyContent: "center", display: "flex" }}>
-        <Loader2 size={28} color={C.teal} className="jt-spin" />
+      <div className="jt-page" style={{ ...page, alignItems: "center", justifyContent: "center" }} aria-busy="true">
+        <style>{globalCss}</style>
+        <Loader2 size={28} color={C.teal} className="jt-spin" aria-label="Loading" />
       </div>
     );
 
   return (
-    <div style={page}>
-      <style>{`
-        .jt-spin { animation: jtspin 1s linear infinite; }
-        @keyframes jtspin { to { transform: rotate(360deg); } }
-        * { -webkit-tap-highlight-color: transparent; }
-        input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-        input[type=number] { -moz-appearance: textfield; }
-      `}</style>
+    <div className="jt-page" style={page}>
+      <style>{globalCss}</style>
 
       {/* Header */}
-      <div style={{ padding: "18px 18px 6px", maxWidth: 480, margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
+      <header style={{ padding: "calc(18px + env(safe-area-inset-top)) 18px 6px", maxWidth: 480, margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-          <div style={{ width: 34, height: 34, background: C.coral, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Utensils size={19} color="#fff" />
+          <div aria-hidden="true" style={{ width: 34, height: 34, background: C.coral, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Flame size={20} color="#fff" strokeWidth={2.4} />
           </div>
           <div>
-            <div style={{ fontSize: 19, fontWeight: 800, color: C.ink, letterSpacing: -0.3 }}>
+            <h1 style={{ margin: 0, fontSize: 19, fontWeight: 800, color: C.ink, letterSpacing: -0.3, lineHeight: 1.2 }}>
               Bulk Tracker
-            </div>
+            </h1>
             <div style={{ fontSize: 11, color: C.inkSoft }}>
               {new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
             </div>
           </div>
         </div>
-      </div>
+      </header>
 
       {/* Body */}
-      <div style={{ flex: 1, overflowY: "auto", maxWidth: 480, margin: "0 auto", width: "100%", boxSizing: "border-box", padding: "8px 14px 110px" }}>
+      <main style={{ flex: 1, overflowY: "auto", maxWidth: 480, margin: "0 auto", width: "100%", boxSizing: "border-box", padding: "8px 14px calc(140px + env(safe-area-inset-bottom))" }}>
         {tab === "today" && (
           <TodayTab
             totals={totals}
@@ -1080,19 +1124,27 @@ export default function CalorieTracker() {
             }}
           />
         )}
-      </div>
+
+        <footer style={{ textAlign: "center", fontSize: 12, color: C.inkSoft, padding: "6px 0 4px", lineHeight: 1.6 }}>
+          Built by{" "}
+          <a href={AUTHOR_URL} rel="author" style={{ color: C.teal, fontWeight: 700 }}>
+            Joseph Leung
+          </a>
+        </footer>
+      </main>
 
       {/* Floating add button (Today tab) */}
       {tab === "today" && (
         <button
           onClick={() => setAddOpen(true)}
+          className="jt-fab"
           style={{
             position: "fixed",
-            bottom: 78,
+            bottom: "calc(78px + env(safe-area-inset-bottom))",
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 30,
-            background: C.coral,
+            background: C.coralInk,
             color: "#fff",
             border: "none",
             padding: "13px 22px",
@@ -1103,7 +1155,7 @@ export default function CalorieTracker() {
             fontSize: 15,
             fontFamily: font,
             cursor: "pointer",
-            boxShadow: "0 6px 18px rgba(226,96,63,0.4)",
+            boxShadow: "0 6px 18px rgba(184,69,39,0.35)",
             borderRadius: 0,
           }}
         >
@@ -1112,7 +1164,8 @@ export default function CalorieTracker() {
       )}
 
       {/* Bottom tab bar */}
-      <div
+      <nav
+        aria-label="Sections"
         style={{
           position: "fixed",
           bottom: 0,
@@ -1124,6 +1177,7 @@ export default function CalorieTracker() {
           maxWidth: 480,
           margin: "0 auto",
           zIndex: 25,
+          paddingBottom: "env(safe-area-inset-bottom)",
         }}
       >
         {[
@@ -1138,6 +1192,8 @@ export default function CalorieTracker() {
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
+              aria-current={on ? "page" : undefined}
+              className="jt-tab"
               style={{
                 flex: 1,
                 padding: "11px 0 14px",
@@ -1152,37 +1208,36 @@ export default function CalorieTracker() {
                 fontFamily: font,
               }}
             >
-              <I size={21} color={on ? C.teal : C.inkSoft} strokeWidth={on ? 2.5 : 2} />
+              <I size={21} color={on ? C.teal : C.inkSoft} strokeWidth={on ? 2.5 : 2} aria-hidden="true" />
               <span style={{ fontSize: 10.5, fontWeight: on ? 700 : 500, color: on ? C.teal : C.inkSoft }}>
                 {t.label}
               </span>
             </button>
           );
         })}
-      </div>
+      </nav>
 
       {/* Add method sheet */}
       <Sheet open={addOpen} onClose={() => !photoBusy && setAddOpen(false)} title="Log food">
         {photoBusy ? (
-          <div style={{ padding: "30px 0", textAlign: "center" }}>
+          <div role="status" style={{ padding: "30px 0", textAlign: "center" }}>
             <Loader2 size={30} color={C.teal} className="jt-spin" />
             <div style={{ marginTop: 14, fontSize: 14, color: C.inkSoft }}>
-              Estimating your meal from the photo
+              Estimating your meal from the photo…
             </div>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
-            {photoErr && <div style={{ color: C.coral, fontSize: 13 }}>{photoErr}</div>}
 
             {/* Native label-wrapped inputs for mobile camera + gallery */}
-            <label style={addBtn(C.teal)}>
+            <label className="jt-press" style={addBtn(C.teal)}>
               <Camera size={20} color="#fff" />
               <span>Take a photo</span>
               <input
                 type="file"
                 accept="image/*"
                 capture="environment"
-                style={{ display: "none" }}
+                className="jt-visually-hidden"
                 onChange={(e) => {
                   const file = e.target.files && e.target.files[0];
                   e.target.value = "";
@@ -1191,13 +1246,13 @@ export default function CalorieTracker() {
               />
             </label>
 
-            <label style={addBtn(C.sun, C.ink)}>
+            <label className="jt-press" style={addBtn(C.sun, C.ink)}>
               <ImageIcon size={20} color={C.ink} />
               <span>Pick from gallery</span>
               <input
                 type="file"
                 accept="image/*"
-                style={{ display: "none" }}
+                className="jt-visually-hidden"
                 onChange={(e) => {
                   const file = e.target.files && e.target.files[0];
                   e.target.value = "";
@@ -1272,14 +1327,39 @@ const page = {
   fontFamily: font,
   background: C.cream,
   color: C.ink,
-  minHeight: "100vh",
-  height: "100vh",
   display: "flex",
   flexDirection: "column",
   width: "100%",
   maxWidth: "100%",
   overflow: "hidden",
 };
+
+const globalCss = `
+  .jt-page { height: 100vh; height: 100dvh; }
+  .jt-spin { animation: jtspin 1s linear infinite; }
+  @keyframes jtspin { to { transform: rotate(360deg); } }
+  * { -webkit-tap-highlight-color: transparent; }
+  input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type=number] { -moz-appearance: textfield; }
+  .jt-page button, .jt-page .jt-press { transition: filter .15s ease, background-color .15s ease; }
+  .jt-page button:active:not(:disabled), .jt-page .jt-press:active { filter: brightness(0.92); }
+  @media (hover: hover) {
+    .jt-page button:hover:not(:disabled), .jt-page .jt-press:hover { filter: brightness(0.96); }
+    .jt-page a:hover { text-decoration-thickness: 2px; }
+  }
+  .jt-page button:focus-visible, .jt-page a:focus-visible, .jt-page input:focus-visible,
+  .jt-press:focus-within {
+    outline: 2px solid ${C.teal}; outline-offset: 2px;
+  }
+  .jt-page input:focus { border-color: ${C.teal} !important; }
+  .jt-visually-hidden {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .jt-page * { transition: none !important; }
+  }
+`;
 
 const cardStyle = {
   background: C.card,
@@ -1293,10 +1373,10 @@ const cardStyle = {
    ============================================================ */
 function TodayTab({ totals, goal, meals, paceNote, suggestions, tookCreatine, creatineStreak, toggleCreatine, onEdit }) {
   const micros = [
-    { label: "Fiber", value: totals.fiber, suffix: "g", color: C.sun },
-    { label: "Sugar", value: totals.sugar, suffix: "g", color: C.coral },
+    { label: "Fiber", value: totals.fiber, suffix: "g", color: C.sunInk },
+    { label: "Sugar", value: totals.sugar, suffix: "g", color: C.coralInk },
     { label: "Sodium", value: totals.sodium, suffix: "mg", color: C.teal },
-    { label: "Sat fat", value: totals.satfat, suffix: "g", color: C.coral },
+    { label: "Sat fat", value: totals.satfat, suffix: "g", color: C.coralInk },
   ];
 
   const byMeal = MEALS.map((m) => ({ meal: m, items: meals.filter((x) => x.meal === m) })).filter(
@@ -1367,6 +1447,7 @@ function TodayTab({ totals, goal, meals, paceNote, suggestions, tookCreatine, cr
       {/* Creatine */}
       <button
         onClick={toggleCreatine}
+        aria-pressed={tookCreatine}
         style={{
           ...cardStyle,
           width: "100%",
@@ -1436,7 +1517,7 @@ function TodayTab({ totals, goal, meals, paceNote, suggestions, tookCreatine, cr
                       P {fmt(m.protein)}  C {fmt(m.carbs)}  F {fmt(m.fat)}
                     </div>
                   </div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: C.coral, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: C.coralInk, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
                     {fmt(m.calories)}
                   </div>
                   <Pencil size={15} color={C.inkSoft} style={{ flexShrink: 0 }} />
@@ -1450,11 +1531,45 @@ function TodayTab({ totals, goal, meals, paceNote, suggestions, tookCreatine, cr
   );
 }
 
-function SectionTitle({ icon: I, text }) {
+function SectionTitle({ icon: I, text, style }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 13 }}>
-      <I size={16} color={C.teal} strokeWidth={2.4} />
-      <span style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{text}</span>
+    <h2 style={{ display: "flex", alignItems: "center", gap: 7, margin: "0 0 13px", fontSize: 14, fontWeight: 700, color: C.ink, ...style }}>
+      <I size={16} color={C.teal} strokeWidth={2.4} aria-hidden="true" />
+      {text}
+    </h2>
+  );
+}
+
+/* ============================================================
+   Charts live in Charts.jsx: recharts is the heaviest dependency and only the
+   Stats and Weight tabs use it, so it's loaded on demand
+   ============================================================ */
+const loadCharts = () => import("./Charts.jsx");
+const CaloriesChart = lazy(() => loadCharts().then((m) => ({ default: m.CaloriesChart })));
+const WeightChart = lazy(() => loadCharts().then((m) => ({ default: m.WeightChart })));
+
+class ChartBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: C.inkSoft, textAlign: "center", padding: "0 12px" }}>
+        Couldn't load the chart. Check your connection and reopen the app.
+      </div>
+    );
+  }
+}
+
+function ChartLoading() {
+  return (
+    <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <Loader2 size={22} color={C.teal} className="jt-spin" aria-label="Loading chart" />
     </div>
   );
 }
@@ -1475,24 +1590,16 @@ function StatsTab({ series, goal, days, expanded, setExpanded }) {
     <div>
       <div style={cardStyle}>
         <SectionTitle icon={BarChart3} text="Last 14 days" />
-        <div style={{ width: "100%", height: 200 }}>
-          <ResponsiveContainer>
-            <BarChart data={series} margin={{ top: 8, right: 4, left: -14, bottom: 0 }}>
-              <XAxis dataKey="label" tick={{ fontSize: 9, fill: C.inkSoft }} interval={1} axisLine={{ stroke: C.line }} tickLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} />
-              <Tooltip
-                cursor={{ fill: C.sunSoft }}
-                contentStyle={{ borderRadius: 0, border: `1px solid ${C.line}`, fontSize: 12 }}
-                formatter={(v) => [`${fmt(v)} kcal`, "Eaten"]}
-              />
-              <ReferenceLine y={goal.calories} stroke={C.teal} strokeDasharray="4 3" strokeWidth={1.5} />
-              <Bar dataKey="cals" radius={0}>
-                {series.map((d, i) => (
-                  <Cell key={i} fill={d.cals >= goal.calories ? C.teal : d.cals > 0 ? C.coral : C.line} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
+        <div
+          role="img"
+          aria-label={`Calories eaten each day for the last 14 days against a goal of ${fmt(goal.calories)} kcal`}
+          style={{ width: "100%", height: 200 }}
+        >
+          <ChartBoundary>
+            <Suspense fallback={<ChartLoading />}>
+              <CaloriesChart series={series} goal={goal.calories} />
+            </Suspense>
+          </ChartBoundary>
         </div>
         <div style={{ display: "flex", borderTop: `1px solid ${C.line}`, marginTop: 8 }}>
           <Stat label="Daily average" value={fmt(avg)} sub="kcal" color={C.ink} />
@@ -1534,7 +1641,7 @@ function StatsTab({ series, goal, days, expanded, setExpanded }) {
                       P {fmt(t.p)}  C {fmt(t.c)}  F {fmt(t.f)}
                     </div>
                   </div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: t.cals >= goal.calories ? C.teal : C.coral, fontVariantNumeric: "tabular-nums" }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: t.cals >= goal.calories ? C.teal : C.coralInk, fontVariantNumeric: "tabular-nums" }}>
                     {fmt(t.cals)}
                   </div>
                   {open ? <ChevronUp size={17} color={C.inkSoft} /> : <ChevronDown size={17} color={C.inkSoft} />}
@@ -1567,6 +1674,8 @@ function StatsTab({ series, goal, days, expanded, setExpanded }) {
 function WeightTab({ sortedWeights, unit, setUnit, toDisplay, fromDisplay, onAdd, onDelete }) {
   const [val, setVal] = useState("");
   const [date, setDate] = useState(todayKey());
+  const [err, setErr] = useState("");
+  const maxDate = todayKey();
 
   const data = sortedWeights.map((w) => ({
     date: w.date,
@@ -1580,8 +1689,17 @@ function WeightTab({ sortedWeights, unit, setUnit, toDisplay, fromDisplay, onAdd
 
   const add = () => {
     const v = Number(val);
-    if (!Number.isFinite(v) || v <= 0) return;
-    onAdd({ date, kg: fromDisplay(v) });
+    const kg = fromDisplay(v);
+    if (!val || !Number.isFinite(v) || kg < 20 || kg > 400) {
+      setErr(`Enter a weight between ${unit === "lb" ? "44 and 880 lb" : "20 and 400 kg"}.`);
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > maxDate) {
+      setErr("Pick a date that isn't in the future.");
+      return;
+    }
+    setErr("");
+    onAdd({ date, kg });
     setVal("");
   };
 
@@ -1589,11 +1707,12 @@ function WeightTab({ sortedWeights, unit, setUnit, toDisplay, fromDisplay, onAdd
     <div>
       <div style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 13 }}>
-          <SectionTitle icon={Scale} text="Bodyweight" />
-          <div style={{ display: "flex", border: `1px solid ${C.line}` }}>
+          <SectionTitle icon={Scale} text="Bodyweight" style={{ margin: 0 }} />
+          <div role="group" aria-label="Weight unit" style={{ display: "flex", border: `1px solid ${C.line}` }}>
             {["lb", "kg"].map((u) => (
               <button
                 key={u}
+                aria-pressed={unit === u}
                 onClick={() => setUnit(u)}
                 style={{ padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: font, background: unit === u ? C.teal : C.card, color: unit === u ? "#fff" : C.inkSoft }}
               >
@@ -1605,28 +1724,43 @@ function WeightTab({ sortedWeights, unit, setUnit, toDisplay, fromDisplay, onAdd
 
         <div style={{ display: "flex", gap: 9, marginBottom: 4 }}>
           <div style={{ flex: 1 }}>
-            <input
-              type="number"
-              inputMode="decimal"
+            <NumIn
               value={val}
-              onChange={(e) => setVal(e.target.value)}
-              placeholder={`Weight (${unit})`}
-              style={inputStyle}
+              onChange={(v) => {
+                setVal(v);
+                setErr("");
+              }}
+              suffix={unit}
+              onKeyDown={(e) => e.key === "Enter" && add()}
+              placeholder="Weight"
+              aria-label={`Weight in ${unit}`}
+              enterKeyHint="done"
             />
           </div>
           <input
             type="date"
             value={date}
-            onChange={(e) => setDate(e.target.value)}
+            max={maxDate}
+            onChange={(e) => {
+              setDate(e.target.value);
+              setErr("");
+            }}
+            aria-label="Weigh-in date"
             style={{ ...inputStyle, width: 140, flexShrink: 0 }}
           />
           <button
             onClick={add}
+            aria-label="Add weigh-in"
             style={{ padding: "0 16px", background: C.teal, color: "#fff", border: "none", cursor: "pointer", display: "flex", alignItems: "center", fontFamily: font, flexShrink: 0 }}
           >
             <Plus size={20} />
           </button>
         </div>
+        {err && (
+          <div role="alert" style={{ color: C.coralInk, fontSize: 12.5, marginTop: 8 }}>
+            {err}
+          </div>
+        )}
       </div>
 
       <div style={cardStyle}>
@@ -1637,19 +1771,16 @@ function WeightTab({ sortedWeights, unit, setUnit, toDisplay, fromDisplay, onAdd
             label="Change"
             value={(change >= 0 ? "+" : "") + change.toFixed(1)}
             sub={unit}
-            color={change > 0 ? C.green : change < 0 ? C.coral : C.inkSoft}
+            color={change > 0 ? C.green : change < 0 ? C.coralInk : C.inkSoft}
           />
         </div>
         <div style={{ width: "100%", height: 200 }}>
           {data.length >= 2 ? (
-            <ResponsiveContainer>
-              <LineChart data={data} margin={{ top: 10, right: 10, left: -14, bottom: 0 }}>
-                <XAxis dataKey="label" tick={{ fontSize: 9, fill: C.inkSoft }} axisLine={{ stroke: C.line }} tickLine={false} />
-                <YAxis domain={["dataMin - 2", "dataMax + 2"]} tick={{ fontSize: 10, fill: C.inkSoft }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ borderRadius: 0, border: `1px solid ${C.line}`, fontSize: 12 }} formatter={(v) => [`${v} ${unit}`, "Weight"]} />
-                <Line type="monotone" dataKey="v" stroke={C.teal} strokeWidth={2.5} dot={{ r: 3, fill: C.teal }} />
-              </LineChart>
-            </ResponsiveContainer>
+            <ChartBoundary>
+              <Suspense fallback={<ChartLoading />}>
+                <WeightChart data={data} unit={unit} />
+              </Suspense>
+            </ChartBoundary>
           ) : (
             <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: C.inkSoft }}>
               Log at least two weigh-ins to see your trend.
@@ -1670,7 +1801,11 @@ function WeightTab({ sortedWeights, unit, setUnit, toDisplay, fromDisplay, onAdd
                 <span style={{ fontSize: 14, fontWeight: 700, color: C.ink, fontVariantNumeric: "tabular-nums" }}>
                   {(Math.round(toDisplay(w.kg) * 10) / 10).toFixed(1)} {unit}
                 </span>
-                <button onClick={() => onDelete(w.date)} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", padding: 2 }}>
+                <button
+                  onClick={() => onDelete(w.date)}
+                  aria-label={`Delete weigh-in from ${shortDay(w.date)}`}
+                  style={{ background: "none", border: "none", cursor: "pointer", display: "flex", padding: 8, margin: -6 }}
+                >
                   <Trash2 size={15} color={C.coral} />
                 </button>
               </div>
@@ -1685,15 +1820,21 @@ function WeightTab({ sortedWeights, unit, setUnit, toDisplay, fromDisplay, onAdd
 /* ============================================================
    Goal tab
    ============================================================ */
-function GoalTab({ goal, setGoal, onClear }) {
-  const [g, setG] = useState(goal);
-  const [confirm, setConfirm] = useState(false);
-  useEffect(() => setG(goal), [goal]);
-  const set = (k) => (v) => setG((s) => ({ ...s, [k]: num(v) }));
-  const dirty =
-    g.calories !== goal.calories || g.protein !== goal.protein || g.carbs !== goal.carbs || g.fat !== goal.fat;
+const GOAL_KEYS = ["calories", "protein", "carbs", "fat"];
+const goalToText = (goal) => Object.fromEntries(GOAL_KEYS.map((k) => [k, String(goal[k])]));
 
-  const macroCals = g.protein * 4 + g.carbs * 4 + g.fat * 9;
+function GoalTab({ goal, setGoal, onClear }) {
+  // keep raw strings while editing so fields can be cleared and retyped
+  const [g, setG] = useState(() => goalToText(goal));
+  const [confirm, setConfirm] = useState(false);
+  useEffect(() => setG(goalToText(goal)), [goal]);
+  const set = (k) => (v) => setG((s) => ({ ...s, [k]: v }));
+  const parsed = Object.fromEntries(GOAL_KEYS.map((k) => [k, Math.round(Math.max(0, num(g[k])))]));
+  const valid = parsed.calories >= 500 && parsed.calories <= 15000 && GOAL_KEYS.every((k) => g[k] !== "");
+  const dirty = GOAL_KEYS.some((k) => parsed[k] !== goal[k] || g[k] === "");
+  const canSave = dirty && valid;
+
+  const macroCals = parsed.protein * 4 + parsed.carbs * 4 + parsed.fat * 9;
 
   return (
     <div>
@@ -1702,7 +1843,12 @@ function GoalTab({ goal, setGoal, onClear }) {
         <div style={{ fontSize: 12, color: C.inkSoft, marginBottom: 10, lineHeight: 1.5 }}>
           This is treated as a floor to hit for your bulk, not a ceiling.
         </div>
-        <NumIn value={g.calories} onChange={set("calories")} suffix="kcal" />
+        <NumIn value={g.calories} onChange={set("calories")} suffix="kcal" aria-label="Daily calorie goal" />
+        {dirty && !valid && (
+          <div role="alert" style={{ color: C.coralInk, fontSize: 12.5, marginTop: 8 }}>
+            Fill in every field. The calorie goal should be between 500 and 15,000 kcal.
+          </div>
+        )}
       </div>
 
       <div style={cardStyle}>
@@ -1723,15 +1869,15 @@ function GoalTab({ goal, setGoal, onClear }) {
       </div>
 
       <button
-        onClick={() => setGoal(g)}
-        disabled={!dirty}
+        onClick={() => setGoal(parsed)}
+        disabled={!canSave}
         style={{
           width: "100%",
           padding: "14px",
-          background: dirty ? C.teal : C.line,
-          color: dirty ? "#fff" : C.inkSoft,
+          background: canSave ? C.teal : C.line,
+          color: canSave ? "#fff" : C.inkSoft,
           border: "none",
-          cursor: dirty ? "pointer" : "default",
+          cursor: canSave ? "pointer" : "default",
           fontWeight: 700,
           fontSize: 15,
           fontFamily: font,
@@ -1743,7 +1889,7 @@ function GoalTab({ goal, setGoal, onClear }) {
           borderRadius: 0,
         }}
       >
-        <Check size={18} /> {dirty ? "Save goals" : "Saved"}
+        <Check size={18} /> {dirty ? "Save goals" : "Goals saved"}
       </button>
 
       <div style={{ ...cardStyle, borderColor: C.coral }}>
@@ -1761,7 +1907,7 @@ function GoalTab({ goal, setGoal, onClear }) {
             </button>
             <button
               onClick={() => { onClear(); setConfirm(false); }}
-              style={{ flex: 1, padding: "12px", background: C.coral, border: "none", color: "#fff", cursor: "pointer", fontWeight: 700, fontFamily: font, borderRadius: 0 }}
+              style={{ flex: 1, padding: "12px", background: C.coralInk, border: "none", color: "#fff", cursor: "pointer", fontWeight: 700, fontFamily: font, borderRadius: 0 }}
             >
               Yes, clear it
             </button>
@@ -1769,12 +1915,35 @@ function GoalTab({ goal, setGoal, onClear }) {
         ) : (
           <button
             onClick={() => setConfirm(true)}
-            style={{ width: "100%", padding: "12px", background: C.card, border: `1px solid ${C.coral}`, color: C.coral, cursor: "pointer", fontWeight: 700, fontFamily: font, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, borderRadius: 0 }}
+            style={{ width: "100%", padding: "12px", background: C.card, border: `1px solid ${C.coral}`, color: C.coralInk, cursor: "pointer", fontWeight: 700, fontFamily: font, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, borderRadius: 0 }}
           >
             <Trash2 size={16} /> Clear all history
           </button>
         )}
       </div>
+
+      <section style={cardStyle} aria-labelledby="about-title">
+        <h2 id="about-title" style={{ display: "flex", alignItems: "center", gap: 7, margin: "0 0 10px", fontSize: 14, fontWeight: 700, color: C.ink }}>
+          <Sparkles size={16} color={C.teal} strokeWidth={2.4} aria-hidden="true" />
+          About Bulk Tracker
+        </h2>
+        <p style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.55, margin: "0 0 8px" }}>
+          A free calorie tracker for bulking, where the daily goal is a floor to hit. Log meals from a photo, a name
+          lookup or by hand, and track macros, bodyweight and your creatine streak. Your log is stored on this device only.
+        </p>
+        <p style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.55, margin: 0 }}>
+          Built by{" "}
+          <a href={AUTHOR_URL} rel="author" style={{ color: C.teal, fontWeight: 700 }}>
+            Joseph Leung
+          </a>{" "}
+          (Joseph Wah Sing Leung), a calisthenics athlete and retired national-level chess player from Richmond Hill,
+          Ontario, to track his own bulk.{" "}
+          <a href="https://github.com/idontreallyknow-20/trackerformyself" style={{ color: C.teal }}>
+            Source on GitHub
+          </a>
+          .
+        </p>
+      </section>
     </div>
   );
 }
