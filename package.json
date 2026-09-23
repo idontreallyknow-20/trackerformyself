@@ -1,24 +1,29 @@
 {
   "name": "trackerformyself",
   "version": "1.0.0",
-  "description": "",
-  "main": "CalorieTracker.jsx",
+  "private": true,
+  "description": "Bulk Tracker: a calorie and bulking tracker PWA by Joseph Leung.",
+  "homepage": "https://trackerformyself.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/idontreallyknow-20/trackerformyself.git"
+  },
+  "author": {
+    "name": "Joseph Leung",
+    "url": "https://josephleung-site.vercel.app"
+  },
+  "license": "ISC",
   "scripts": {
     "build": "esbuild src/main.jsx --bundle --minify --define:process.env.NODE_ENV='\"production\"' --loader:.jsx=jsx --outfile=docs/app.js"
   },
-  "repository": {
-    "type": "git",
-    "url": "http://local_proxy@127.0.0.1:46155/git/idontreallyknow-20/trackerformyself"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "esbuild": "^0.28.0",
-    "lucide-react": "^1.17.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "recharts": "^3.8.1",
-    "sharp": "^0.34.5"
+    "lucide-react": "^1.47.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "recharts": "^3.10.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "sharp": "^0.35.4"
   }
 }
