@@ -10,20 +10,20 @@
     />
     <meta name="author" content="Joseph Leung" />
     <meta name="robots" content="index, follow, max-image-preview:large" />
-    <link rel="canonical" href="%SITE_URL%/" />
+    <link rel="canonical" href="https://trackerformyself.vercel.app/" />
     <link rel="author" href="https://josephleung-site.vercel.app" />
 
     <!-- Open Graph / Twitter -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Bulk Tracker" />
     <meta property="og:locale" content="en_CA" />
-    <meta property="og:url" content="%SITE_URL%/" />
+    <meta property="og:url" content="https://trackerformyself.vercel.app/" />
     <meta property="og:title" content="Bulk Tracker | a calorie tracker for bulking by Joseph Leung" />
     <meta
       property="og:description"
       content="A free calorie and macro tracker where the daily goal is a floor to hit. Photo estimates, protein, bodyweight and creatine streaks."
     />
-    <meta property="og:image" content="%SITE_URL%/og-image.png" />
+    <meta property="og:image" content="https://trackerformyself.vercel.app/og-image.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="Bulk Tracker app by Joseph Leung: calorie ring, macros and creatine streak" />
@@ -33,7 +33,7 @@
       name="twitter:description"
       content="A free calorie and macro tracker where the daily goal is a floor to hit. Photo estimates, protein, bodyweight and creatine streaks."
     />
-    <meta name="twitter:image" content="%SITE_URL%/og-image.png" />
+    <meta name="twitter:image" content="https://trackerformyself.vercel.app/og-image.png" />
     <meta name="twitter:image:alt" content="Bulk Tracker app by Joseph Leung: calorie ring, macros and creatine streak" />
 
     <!-- PWA -->
@@ -48,7 +48,78 @@
     <link rel="icon" href="./favicon-32.png" type="image/png" sizes="32x32" />
 
     <script type="application/ld+json">
-%JSON_LD%
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Person",
+            "@id": "https://josephleung-site.vercel.app/#joseph",
+            "name": "Joseph Leung",
+            "alternateName": [
+              "Joseph Wah Sing Leung",
+              "Wah Sing Leung"
+            ],
+            "url": "https://josephleung-site.vercel.app",
+            "description": "Joseph Leung is a student founder from Richmond Hill, Ontario: a retired national-level chess player, calisthenics athlete, and the writer of the Daily Brief HQ newsletter.",
+            "homeLocation": {
+              "@type": "Place",
+              "name": "Richmond Hill, Ontario, Canada"
+            },
+            "sameAs": [
+              "https://www.linkedin.com/in/joseph-leung-21b3473bb/",
+              "https://github.com/idontreallyknow-20",
+              "https://www.chess.com/member/squeakycrab",
+              "https://lichess.org/@/BigTrustedCrabby",
+              "https://lichess.org/@/UltraAddict2010",
+              "https://ratings.fide.com/profile/2636654",
+              "https://www.chess.ca/en/ratings/p/?id=167606",
+              "https://dailybriefhq.com",
+              "https://dailybriefhq.com/about",
+              "https://nerfchess.com"
+            ]
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://trackerformyself.vercel.app/#website",
+            "url": "https://trackerformyself.vercel.app/",
+            "name": "Bulk Tracker",
+            "description": "A free calorie and macro tracker for bulking, built by Joseph Leung.",
+            "inLanguage": "en-CA",
+            "creator": {
+              "@id": "https://josephleung-site.vercel.app/#joseph"
+            },
+            "publisher": {
+              "@id": "https://josephleung-site.vercel.app/#joseph"
+            }
+          },
+          {
+            "@type": "WebApplication",
+            "@id": "https://trackerformyself.vercel.app/#app",
+            "name": "Bulk Tracker",
+            "url": "https://trackerformyself.vercel.app/",
+            "image": "https://trackerformyself.vercel.app/og-image.png",
+            "description": "A calorie and bulking tracker that treats the daily goal as a floor to hit. Photo and name lookup food estimates, macros and micros, bodyweight charting, a creatine streak and a 14 day calorie history.",
+            "applicationCategory": "HealthApplication",
+            "operatingSystem": "Any (web browser, installable PWA)",
+            "browserRequirements": "Requires JavaScript",
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "CAD"
+            },
+            "creator": {
+              "@id": "https://josephleung-site.vercel.app/#joseph"
+            },
+            "author": {
+              "@id": "https://josephleung-site.vercel.app/#joseph"
+            },
+            "isPartOf": {
+              "@id": "https://trackerformyself.vercel.app/#website"
+            },
+            "codeRepository": "https://github.com/idontreallyknow-20/trackerformyself"
+          }
+        ]
+      }
     </script>
 
     <style>
@@ -65,7 +136,7 @@
       .shell p { font-size: 14px; line-height: 1.55; color: #6F6457; margin: 18px 0 0; }
       .shell a { color: #147D74; font-weight: 700; }
     </style>
-    %PRELOAD%
+    <link rel="modulepreload" href="./assets/chunk-U64SH3C3.js" />
   </head>
   <body>
     <div id="root">
@@ -85,6 +156,6 @@
         <noscript><p>Bulk Tracker needs JavaScript to run.</p></noscript>
       </div>
     </div>
-    <script type="module" src="./%APP_JS%"></script>
+    <script type="module" src="./assets/main-KRS2GQCN.js"></script>
   </body>
 </html>
